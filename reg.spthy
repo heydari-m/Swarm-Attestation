@@ -1,0 +1,131 @@
+theory registration
+
+begin
+
+builtins: symmetric-encryption
+
+functions:  Eq/2, Neq/2
+
+restriction equality:      "All #i    x y    .  Eq( x, y ) @ i ==> x = y"
+
+restriction inequality:    "All #i    x    .  Neq( x, x ) @ i ==> F"
+
+
+// Assigning a secret shared key to Edge and Prover  
+rule CreateSharedKey:
+    [ Fr( ~sk ) ]
+    -->
+    [ !SharedKey( $Edge, $Prover,  ~sk ), !SharedKey( $Prover, $Edge, ~sk ) ]
+
+
+
+// Sending registration request message to the Edge 
+rule Prover_1:
+    let
+       reg_req = <'1', $Edge, $Prover, ~l>
+    in
+	
+    [ 
+		Fr(~l),
+		!SharedKey( $Prover, $Edge, sk)
+    ]
+	
+	--[
+		RegReq($Edge, $Prover, ~l), Role($Prover), Secret($Prover, sk)
+	]->
+    
+	[ 
+		Out( senc(reg_req,sk))
+		,State_prv1($Edge,$Prover, ~l)
+	]
+
+
+// Receiving registration completed message at edge and sending acknowledgment to the prover 
+rule Edge_1:
+	let 
+	  msg=senc(<'1', id, pvr, nonce>, sk)
+      ack=<'Completed',pvr, $Edge, nonce>
+	in
+    [
+      In( msg)
+	  ,!SharedKey($Edge, $Prover, sk)
+    ]
+
+  --[
+	Eq(id,$Edge)
+	,Registered($Edge, $Prover, nonce), Neq($Edge, $Prover), OnlyOnce('Edge_1')
+        ,Role($Edge), Honest($Prover), Secret($Edge, sk), Authen($Edge, $Prover, nonce)
+    ]->
+    [ Out( senc(ack,sk)) ]
+
+
+// Receiving acknowledgment at prover
+rule Prover_2:
+        let
+          ack=senc(<msg,pvr, edg, nonce>,sk)
+        in
+    [
+      In(ack)
+      ,!SharedKey($Prover, $Edge, sk), State_prv1($Edge, $Prover, ~l)
+    ]
+
+  --[
+        Eq(msg,'Completed'), Eq(pvr, $Prover), Eq(edg, $Edge), Eq(nonce, ~l)
+        ,RegCompleted($Edge,$Prover, nonce), Role($Prover), Honest($Edge), Secret($Prover, sk) 
+        ,Neq($Prover, $Edge), OnlyOnce('Prover_2')
+    ]->
+    []
+
+
+lemma correctness: exists-trace
+"Ex Edge Prover nonce l 
+        #t01 #t02 #t03
+.
+        RegReq(Edge, Prover, l) @ t01
+        &
+        Registered(Edge, Prover,nonce) @ t02
+        &
+        RegCompleted(Edge, Prover, nonce) @ t03
+        &
+        not(Edge=Prover)
+        &
+        #t01<#t02
+        &
+        #t02<#t03
+                &
+                (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
+
+"
+
+lemma auth_weak_agreement:
+"
+All Edge Prover nonce  #i .
+        (
+                (
+                         
+                        RegCompleted(Edge, Prover, nonce) @ i 
+                )
+                ==>
+        (
+                         
+                        (Ex #j . Registered(Edge, Prover, nonce ) @ j & (#j<#i))
+                        
+                )
+        )
+"
+
+lemma nonce_secrecy:
+"All Edge Prover nonce #i .
+        RegCompleted(Edge, Prover, nonce) @i
+        ==>
+        (
+        not (Ex #j . KU(nonce) @ j )     
+        )
+"
+
+
+
+
+end
+
+

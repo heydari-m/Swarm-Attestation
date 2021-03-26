@@ -1,0 +1,291 @@
+theory  attestation
+begin
+
+builtins: symmetric-encryption, hashing
+functions: h/1, pd1/1, pd2/1, pd3/1
+
+
+restriction equality:      "All #i    x y    .  Eq( x, y ) @ i ==> x = y"
+
+restriction inequality:    "All #i    x    .  Neq( x, x ) @ i ==> F"
+
+// Assigning a shared key to Edge and Root  
+rule CreateSharedKey:
+    [ Fr( ~k ) ]
+    -->
+    [ !SharedKey( $Edge, $Root,  ~k ), !SharedKey( $Root, $Edge, ~k ) ]
+
+// Assigning a secret  key to Edge and Prover
+rule CreateSecretKey:
+    [ Fr( ~s ) ]
+    -->
+    [ !SecretKey( $Edge, $Prover,  ~s ), !SecretKey( $Prover, $Edge, ~s ) ]
+
+// Assigning a memory address for attestation 
+rule Addess:
+    [Fr(~add)]
+    -->
+    [!AttAdd($Root, $Edge, ~add), !AttAdd($Edge, $Root, ~add), !AttAdd($Edge, $Prover, ~add), !AttAdd($Prover, $Edge, ~add) ]
+
+//Asigning a nonce value for exchanged messages between Root and Edge
+
+rule Nonce_1:
+    [ Fr( ~n ) ]
+    -->
+    [ !Nonce($Root, $Edge,  ~n ), !Nonce($Edge, $Root, ~n ) ]
+
+//Asigning a nonce value for exchanged messages between Edge and Prover
+
+rule Nonce_2:
+    [ Fr( ~l ) ]
+    -->
+    [ !Nonce($Prover, $Edge,  ~l), !Nonce($Edge, $Prover, ~l) ]
+
+
+
+
+// Sending a request for prover list to the edge 
+rule R_1:
+    
+    let
+     
+      prover_req = <$Edge,~n, '1'>
+    in
+        [
+               !SharedKey($Edge, $Root, k)
+               , !Nonce($Root, $Edge, ~n)
+        ]
+
+        --[
+                SendReq($Root, $Edge, ~n), Neq($Root, $Edge), OnlyOnce('R_1')
+          ]->
+
+        [
+                Out( senc(prover_req,k))
+        ]
+
+// Receiving root's request at edge and sending the response:
+rule E_1:
+        let
+          m=sdec(msg,k)
+          id=fst(m)
+          nonce=fst(snd(m))
+          pvs = <'P1','P2'> 
+        in
+    [
+      In(msg)
+      ,!SharedKey($Root, $Edge, k), !Nonce($Edge, $Root, ~n) 
+    ]
+
+  --[
+                Eq(id,$Edge), Eq(nonce,~n) 
+                , SendRes($Root, $Edge, ~n)
+                , Neq($Edge, $Root)
+                , OnlyOnce('E_1')
+                
+    ]->
+
+    [Out(senc(<$Edge,pvs,nonce>,k))]
+
+// Receiving edge's response at root and sending the attestation request:
+
+rule R_2:
+        let
+          m=sdec(msg,k)
+          id=fst(m)
+          rest=snd(m)
+		  pvs=fst(rest)
+		  nonce=snd(rest)
+		  
+          
+        in
+    [
+      In(msg)
+      ,!SharedKey($Root, $Edge, k), !AttAdd($Root, $Edge, add), !Nonce($Root, $Edge, ~n)
+    ]
+
+  --[
+              Eq(id,$Edge), Eq(nonce,~n)  
+              , Update($Edge,pvs), SendAtt($Edge, add)
+			  , Look(id, pvs, nonce), Neq($Root, $Edge), OnlyOnce('R_2')
+    ]->
+
+    [Out(<'1', pd1(senc(<$Edge,add,~n>,k))>)]
+
+// Receiving root's request at edge and sending the attestation request to provers:
+rule E_2:
+        let
+          m=sdec(msg,k)
+          id=fst(m)
+          rest=snd(m)
+          address=fst(rest)
+          nonce=snd(rest)
+
+        in
+    [
+      In(<'1', pd1(msg)>) 
+      ,!SharedKey($Root, $Edge, k), !SecretKey($Edge, $Prover, s), !AttAdd($Edge, $Root, add), !Nonce($Edge, $Prover, ~l), !Nonce($Edge, $Root, ~n) 
+    ]
+
+  --[
+                Eq(id,$Edge), Eq(nonce,~n) 
+                , Attestation($Prover, add)
+                , Neq($Edge, $Prover)
+                , OnlyOnce('E_2')
+                
+    ]->
+    [Out(pd2(senc(<$Prover,address,~l>,s)))]
+
+// Receiving edge's attestation request at prover and sending the attestation response:
+rule P_1:
+        let
+          m=sdec(msg,s)
+          id=fst(m)
+          rest=snd(m)
+                  adr=fst(rest)
+                  nonce=snd(rest)
+
+        hval=h(adr)
+        in
+    [
+      In(pd2(msg))
+      ,!SecretKey($Prover, $Edge, s), !AttAdd($Prover, $Edge, add), !Nonce($Prover, $Edge, ~l)
+    ]
+
+  --[
+                Eq(id,$Prover) , Eq(nonce,~l)
+                , Response($Edge, $Prover, ~l)
+                , Neq($Prover, $Edge) 
+                , OnlyOnce('P_1')
+    ]->
+    [Out(<'3', pd3(senc(<$Edge,hval, ~l>,s))>)]
+
+// Receiving prover's attestation response at Edge, Validating and saving  the result  
+rule E_3:
+        let
+          m=sdec(msg,s)
+          id=fst(m)
+          rest=snd(m)
+                  result=fst(rest)
+                  nonce=snd(rest)
+          hash=h(add)
+
+        in
+    [
+      In(<'3', pd3(msg)>)
+      ,!SecretKey($Edge, $Prover, s), !AttAdd($Edge, $Prover, add), !Nonce($Edge, $Prover, ~l)
+      
+    ]
+
+  --[
+                Eq(id,$Edge) , Eq(result,hash), Eq(nonce,~l), Neq($Edge, $Prover)
+                , OnlyOnce('E_3')  
+                , Saved($Prover, add, ~l)
+                , Completed($Prover, $Edge,  ~l)
+
+    ]->
+    []
+
+
+lemma correctness: exists-trace
+"Ex Edge Root n pvs add Prover l
+        #t01 #t02 #t03 #t04 #t05 #t06
+.
+        SendReq(Root, Edge, n) @ t01
+        &
+        SendRes(Root, Edge, n) @ t02
+		&
+        Update(Edge, pvs) @ t03
+        &
+        SendAtt(Edge, add) @ t03        
+        &
+        Attestation(Prover, add) @t04
+        &
+        Response(Edge, Prover, l) @t05
+        &
+        Saved(Prover, add, l) @t06
+        &
+        Completed(Prover, Edge, l) @t06
+        & 
+        not(Edge=Root)
+        &
+        not(Edge=Prover)
+        &
+        not(Root=Prover)
+        &         
+        #t01<#t02
+        & 
+        #t02<#t03
+        &
+        #t03<#t04
+        &
+        #t04<#t05
+       &
+       #t05<#t06
+       &
+        (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
+"
+
+
+
+lemma auth_weak_agreement1:
+"
+All Root Edge nonce  #i .
+        (
+                (
+
+                        SendRes(Root, Edge, nonce) @ i
+                )
+                ==>
+        (
+
+                        (Ex #j . SendReq(Root, Edge, nonce) @ j & (#j<#i))
+
+                )
+        )
+"
+
+
+lemma auth_weak_agreement2:
+"
+All Edge Prover l  #i .
+        (
+                (
+
+                       Completed(Prover, Edge,  l) @ i
+                )
+                ==>
+        (
+
+                        (Ex #j . Response(Edge, Prover, l) @ j & (#j<#i))
+
+                )
+        )
+"
+
+lemma att_secrecy:
+"All Prover Edge nonce  #i .
+        Completed(Prover, Edge, nonce) @i
+        ==>
+        (
+        not (Ex #j . KU(nonce) @ j )
+        )
+"
+
+
+lemma att_secrecy2:
+"All Prover add l  #i .
+        Saved(Prover, add, l) @i
+        ==>
+        (
+        not (Ex #j . KU(add) @ j )
+        )
+"
+
+
+
+end
+
+
+
+

@@ -1,0 +1,132 @@
+theory new_setup
+begin
+
+builtins: symmetric-encryption
+
+functions:  Eq/2, Neq/2
+
+restriction equality:      "All #i    x y    .  Eq( x, y ) @ i ==> x = y"
+
+restriction inequality:    "All #i    x    .  Neq( x, x ) @ i ==> F"
+
+
+// Assigning a shared key to Edge and Root  
+rule CreateSharedKey:
+    [ Fr( ~k ) ]
+    -->
+    [ !SharedKey($Edge, $Root, ~k), !SharedKey($Root, $Edge, ~k) ]
+
+
+// Sending setup request message to the root 
+rule Edge_1:
+    let
+      setup_req = <'Request', $Root, $Edge, ~n>
+    in
+	
+    [ 
+      Fr(~n),	
+      !SharedKey($Edge, $Root, k)
+    ]
+	
+	--[
+		SendReq($Root, $Edge, ~n)
+                , Role($Edge)
+	]->
+    
+	[ 
+		Out( senc(setup_req,k))
+                ,State_edge1($Root, $Edge, ~n)
+	]
+
+
+// Receiving setup request message at Root and sending "ack" message to Edge:
+rule Root_1:
+	let 
+          msg=senc(<'Request',rut, edg,nonce>,k)
+          ack=<'Registered', edg, nonce>
+        in
+    [
+      In(msg)
+	  , !SharedKey($Root, $Edge, k)
+    ]
+
+  --[
+         Eq(rut,$Root), Neq($Root, $Edge)
+	, Registered($Root, $Edge, nonce), OnlyOnce('Root_1'), Honest($Edge), Role($Root)
+    ]->
+    [ Out( senc(ack,k)) ]
+
+
+//Receiving acknowledgement at Edge
+rule Edge_2:
+        let
+          ack=senc(<msg, id, nonce>,k)
+                  
+        in
+    [
+      In(ack)
+          , !SharedKey($Edge, $Root, k), State_edge1($Root, $Edge, ~n)
+    ]
+
+  --[
+                Eq(msg, 'Registered'), Eq(nonce, ~n), Eq(id, $Edge)
+                ,RegCompleted($Root, $Edge, nonce), OnlyOnce('Edge_2'), Secret($Edge,k), Neq($Edge, $Root), Honest($Root), Role($Edge)
+    ]->
+    []
+
+
+
+lemma correctness: exists-trace
+"Ex Root Edge n nonce 
+        #t01 #t02 #t03
+.
+        SendReq(Root, Edge, n) @ t01
+        &
+        Registered(Root, Edge, nonce) @ t02
+        &
+        RegCompleted(Root, Edge, nonce) @ t03
+        &
+        not(Root=Edge)
+        &
+        #t01<#t02
+        &
+        #t02<#t03
+        &
+                (All event #i #j . OnlyOnce(event) @ i & OnlyOnce(event) @ j ==> #i=#j)
+
+"
+
+lemma auth_weak_agreement:
+"
+All Root Edge nonce  #i .
+        (
+                (
+
+                        RegCompleted(Root, Edge, nonce) @ i
+                )
+                ==>
+        (
+
+                        (Ex #j . Registered(Root, Edge, nonce ) @ j & (#j<#i))
+
+                )
+        )
+"
+
+
+lemma nonce_secrecy:
+"All Root Edge nonce #i .
+        RegCompleted(Root, Edge, nonce) @i
+        ==>
+        (
+        not (Ex #j . KU(nonce) @ j )
+        )
+"
+
+
+
+lemma  key_secret:
+    "All Root m #i #j. Secret(Root,m) @i & K(m) @j ==> F"
+
+
+end
